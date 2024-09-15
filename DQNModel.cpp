@@ -26,6 +26,39 @@ torch::Tensor DQN::forward(torch::Tensor x) {
     return x;
 }
 
+// DQN::DQN(int input_size, int output_size) {
+//     fc1 = register_module("fc1", torch::nn::Linear(input_size, 512));
+//     fc2 = register_module("fc2", torch::nn::Linear(512, 256));
+
+//     // 定義價值流和優勢流的全連接層
+//     value_stream_fc = register_module("value_stream_fc", torch::nn::Linear(256, 128));
+//     advantage_stream_fc = register_module("advantage_stream_fc", torch::nn::Linear(256, 128));
+
+//     value_output = register_module("value_output", torch::nn::Linear(128, 1));
+//     advantage_output = register_module("advantage_output", torch::nn::Linear(128, output_size));
+
+//     dropout = register_module("dropout", torch::nn::Dropout(0.2));
+// }
+
+// 前向傳播：數據如何流經每一層神經網路
+// torch::Tensor DQN::forward(torch::Tensor x) {
+//     x = torch::relu(fc1->forward(x));
+//     x = dropout->forward(x);
+//     x = torch::relu(fc2->forward(x));
+
+//     // 價值流
+//     auto value = torch::relu(value_stream_fc->forward(x));
+//     value = value_output->forward(value);
+
+//     // 優勢流
+//     auto advantage = torch::relu(advantage_stream_fc->forward(x));
+//     advantage = advantage_output->forward(advantage);
+
+//     // 合併價值和優勢，計算最終的 Q 值
+//     auto q_values = value + advantage - advantage.mean(1, true);
+//     return q_values;
+// }
+
 // 保存模型權重
 void DQN::save_weights(const std::string& file_path) {
     torch::serialize::OutputArchive archive;

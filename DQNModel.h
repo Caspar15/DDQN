@@ -12,6 +12,12 @@
 struct DQN : torch::nn::Module {
    torch::nn::Linear fc1{nullptr}, fc2{nullptr}, fc3{nullptr}, fc4{nullptr}, fc5{nullptr};
    torch::nn::Dropout dropout{nullptr};
+   
+   // 另一個方法
+   // torch::nn::Linear fc1{nullptr}, fc2{nullptr};
+   // torch::nn::Linear value_stream_fc{nullptr}, advantage_stream_fc{nullptr};
+   // torch::nn::Linear value_output{nullptr}, advantage_output{nullptr};
+   // torch::nn::Dropout dropout{nullptr};
 
    // 構造函數：初始化每一層神經網絡
    DQN(int input_size, int output_size);

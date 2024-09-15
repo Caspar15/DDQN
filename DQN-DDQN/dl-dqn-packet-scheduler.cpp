@@ -170,3 +170,178 @@ DL_DQN_PacketScheduler::ComputeReward(RadioBearer* bearer)
     }
     return reward;
 }
+
+
+
+// 另一種方法
+// #include "dl-dqn-packet-scheduler.h"
+// #include "DQNTrainer.h"
+// #include "../mac-entity.h"
+// #include "../../packet/Packet.h"
+// #include "../../packet/packet-burst.h"
+// #include "../../../device/NetworkNode.h"
+// #include "../../../flows/radio-bearer.h"
+// #include "../../../protocolStack/rrc/rrc-entity.h"
+
+// #include "../../../flows/application/Application.h"
+// #include "../../../device/GNodeB.h"
+// #include "../../../protocolStack/mac/AMCModule.h"
+// #include "../../../phy/phy.h"
+// #include "../../../core/spectrum/bandwidth-manager.h"
+
+// // 初始化 DQN 模型訓練器
+// DL_DQN_PacketScheduler::DL_DQN_PacketScheduler()
+//     : m_dqnTrainer(5, 4, 0.95, 0.0001) // 輸入維度 5，動作空間大小 4，調整了 gamma 和學習率
+// {
+//     SetMacEntity(nullptr);
+//     CreateFlowsToSchedule();
+// }
+
+// DL_DQN_PacketScheduler::~DL_DQN_PacketScheduler()
+// {
+//     Destroy(); // 清理資源
+// }
+
+// void
+// DL_DQN_PacketScheduler::DoSchedule()
+// {
+//     DEBUG_LOG_START_1(SIM_ENV_SCHEDULER_DEBUG)
+//     cout << "Start DL DQN-based packet scheduler for node "
+//                 << GetMacEntity()->GetDevice()->GetIDNetworkNode() << endl;
+//     DEBUG_LOG_END
+
+//     UpdateAverageTransmissionRate();
+//     CheckForDLDropPackets();
+//     SelectFlowsToSchedule();
+//     ComputeWeights();
+
+//     if (GetFlowsToSchedule()->size() == 0)
+//         {
+
+//         }
+//     else
+//         {
+//         RBsAllocation();
+//         }
+
+//     StopSchedule();
+//     ClearFlowsToSchedule();
+// }
+
+// // 使用策略網路 Q 值作為調度度量
+// double
+// DL_DQN_PacketScheduler::ComputeSchedulingMetric(RadioBearer* bearer, double spectralEfficiency, int subChannel)
+// {
+//     torch::Tensor state = GetStateTensor(bearer, spectralEfficiency, subChannel);
+
+//     // 使用策略網路獲取 Q 值
+//     torch::Tensor q_values = m_dqnTrainer.forward(state);
+//     double q_value = q_values.max().item<double>(); 
+
+//     return q_value; // 返回最大 Q 值作為 metric
+// }
+
+// void
+// DL_DQN_PacketScheduler::ComputeWeights()
+// {
+//     DEBUG_LOG_START_1(SIM_ENV_SCHEDULER_DEBUG)
+//     cout << "Compute DQN Weights" << endl;
+//     DEBUG_LOG_END
+
+//     for (auto flow : *GetFlowsToSchedule())
+//         {
+//         RadioBearer* bearer = flow->GetBearer();
+//         if (bearer->HasPackets())
+//             {
+//                 double spectralEfficiency = bearer->GetSpectralEfficiency();
+//                 int subChannel = 0; // 根據需要獲取正確的子信到信息
+
+//                 torch::Tensor state = GetStateTensor(bearer, spectralEfficiency, subChannel);
+//                 int action = m_dqnTrainer.select_action(state); // 選擇動作
+
+//                 // 執行動作後，獲取下一狀態和獎勵
+//                 // 在實際實現中，需要根據動作對環境進行更新。
+//                 torch::Tensor next_state = GetNextStateTensor(bearer);
+//                 float reward = ComputeReward(bearer);
+
+//                 bool done = false; // 根據條件判斷是否為終止狀態
+
+//                 Experience exp = {state, next_state, action, reward, done};
+//                 m_dqnTrainer.store_experience(exp); // 儲存經驗
+
+//                 // 根據需要調用訓練函數
+//                 m_dqnTrainer.train();
+//             }
+//         }
+// }
+
+// torch::Tensor
+// DL_DQN_PacketScheduler::GetStateTensor(RadioBearer* bearer, double spectralEfficiency, int subChannel)
+// {
+//     // 標準化各項指標
+//     float normalized_HOL = static_cast<float>(bearer->GetHeadOfLinePacketDelay()) / max_HOL;
+//     float normalized_rate = static_cast<float>(bearer->GetAverageTransmissionRate()) / max_rate;
+//     float normalized_spectral_efficiency = static_cast<float>(spectralEfficiency) / max_spectral_efficiency;
+//     float normalized_subChannel = static_cast<float>(subChannel) / max_subChannel;
+//     float normalized_queue_size = static_cast<float>(bearer->GetQueueSize()) / max_queue_size;
+
+//     std::vector<float> state = {
+//         normalized_HOL,
+//         normalized_rate,
+//         normalized_spectral_efficiency,
+//         normalized_subChannel,
+//         normalized_queue_size
+//     };
+    
+//     return torch::tensor(state).unsqueeze(0); // 增加批次維度
+// }
+
+// torch::Tensor
+// DL_DQN_PacketScheduler::GetNextStateTensor(RadioBearer* bearer)
+// {
+//     // 根據動作更新狀態，這裡假設動作已經對狀態產生影響
+//     float next_HOL = static_cast<float>(bearer->GetHeadOfLinePacketDelay()) / max_HOL - 0.01f;
+//     float next_rate = static_cast<float>(bearer->GetAverageTransmissionRate()) / max_rate + 0.01f;
+//     float next_spectral_efficiency = static_cast<float>(bearer->GetSpectralEfficiency()) / max_spectral_efficiency;
+//     float next_subChannel = 0.0f; // 根據實際情況更新
+//     float next_queue_size = static_cast<float>(bearer->GetQueueSize()) / max_queue_size - 0.01f;
+
+//     std::vector<float> next_state = {
+//         next_HOL,
+//         next_rate,
+//         next_spectral_efficiency,
+//         next_subChannel,
+//         next_queue_size
+//     };
+    
+//     return torch::tensor(next_state).unsqueeze(0);
+// }
+
+// float
+// DL_DQN_PacketScheduler::ComputeReward(RadioBearer* bearer)
+// {
+//     // 平均化個性指標
+//     float normalized_rate = static_cast<float>(bearer->GetAverageTransmissionRate()) / max_rate;
+//     float normalized_HOL = static_cast<float>(bearer->GetHeadOfLinePacketDelay()) / max_HOL;
+//     float normalized_spectral_efficiency = static_cast<float>(bearer->GetSpectralEfficiency()) / max_spectral_efficiency;
+
+//     // 權重設置
+//     float rate_weight = 1.0f;
+//     float HOL_weight = -1.0f;
+//     float spectral_efficiency_weight = 1.0f;
+
+//     // 計算獎勵
+//     float reward = rate_weight * normalized_rate +
+//                    HOL_weight * normalized_HOL +
+//                    spectral_efficiency_weight * normalized_spectral_efficiency;
+
+//     // 添加懲罰項或額外獎勵
+//     if (normalized_HOL > 0.8f) {
+//         reward -= 0.5f; // 懲罰高延遲
+//     }
+//     if (normalized_rate > 0.8f) {
+//         reward += 0.5f; // 獎勵高吞吐量
+//     }
+
+//     return reward;
+// }

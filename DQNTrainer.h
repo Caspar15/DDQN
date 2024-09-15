@@ -9,6 +9,7 @@
 #include <torch/torch.h>
 #include "DQNModel.h"
 #include <vector>
+#include <deque>
 
 // 定義一個經驗回放數據結構，存儲每一步的狀態、動作、獎勵等，state 跟 action 就是這裡定義的。
 struct Experience {
@@ -29,6 +30,15 @@ public:
    // 我這邊說明一下我想到的方法，因為 DQN 是有回饋的，所以加上 greedy algorithm 的部分去跑，而 DQN 內的 貪心算法就是 epsilon 的定義。
    // 一開始選擇最優的 action，後續選擇較多的隨機動作，等結果跑出來再回測是哪個部分出現問題。
 
+// 另一種方法
+// public:
+//    DQNTrainer(int input_size, int output_size, float gamma, float lr);
+//    void train();
+//    int select_action(torch::Tensor state);
+//    torch::Tensor forward(torch::Tensor state);
+//    void update_epsilon();
+//    void store_experience(const Experience& exp);
+
 // 這邊都是定義 epsilon 的部分
 private:
    DQN policy_model; // 行為網路
@@ -40,6 +50,10 @@ private:
    float epsilon_min;  // 最小探索率
    void update_target_model(); // 更新目標網絡的參數
    float max_gred_norm; // 梯度下降的最大范數
+
+   // 另一種方法，經驗回放緩衝區
+   // std::deque<Experience> replay_memory;
+   // size_t replay_memory_capacity;
 };
 
 #endif // DQN_TRAINER_H
