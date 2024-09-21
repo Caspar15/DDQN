@@ -1,59 +1,58 @@
-// 先稍微說明我更改啥
-// Experience：這是一個結構體，用於存儲經驗回放中的每一步，包括狀態、動作、獎勵和下一步的狀態。就是我們卡的 state 和 action 的部分。
-// DQNTrainer：這是訓練 DQN 模型的核心類，包含了模型的更新、動作選擇等邏輯。
-// target_model：這是一個新的模型，用於實現 Double DQN，這可以幫助減少 Q-learning 中的過估計問題。這部分很重要，還沒完全調整 Double DQN 的東西，我只是先把一個原理拿來試做，可以刪除。
-// update_target_model()：這個函數負責將當前模型的權重複製到目標模型中，以實現 Double DQN。
 #ifndef DQN_TRAINER_H
 #define DQN_TRAINER_H
 
-#include <torch/torch.h>
-#include "DQNModel.h"
-#include <vector>
-#include <deque>
+#include <torch/torch.h> // 引進 PyTorch 的核心庫
+#include "DQNModel.h"    // 引入 DQN 模型
+#include <vector>        // 用於儲存經驗回放
 
-// 定義一個經驗回放數據結構，存儲每一步的狀態、動作、獎勵等，state 跟 action 就是這裡定義的。
-struct Experience {
-   torch::Tensor state;
-   torch::Tensor next_state;
-   int action;
-   float reward;
-   bool done; // 判斷是否為終止狀態
+// 定義經驗回放資料結構
+// Experience 結構用於儲存訓練過程中的狀態轉移 (s, a, r, s')，每次訓練都從此結構中提取樣本
+struct Experience
+{
+   torch::Tensor state;      // 目前狀態
+   torch::Tensor next_state; // 下一個狀態
+   int action;               // 動作
+   float reward;             // 獎勵
 };
 
-class DQNTrainer {
+// 定義 DQN 訓練器類
+class DQNTrainer
+{
 public:
-   DQNTrainer(int input_size, int output_size, float gamma, float lr);
-   void train(std::vector<Experience>& replay_memory);
+   DQNTrainer(int input_size, int output_size, float gamma, float lr, int target_update_freq);
+
+   // 訓練函數：用於根據經驗回放資料訓練模型
+   // replay_memory：經驗重播緩衝區
+   // train_step：目前訓練步數
+   void train(std::vector<Experience> &replay_memory, int train_step);
+
+   // 動作選擇函數：根據 epsilon-greedy 策略選擇動作
+   // state：目前狀態張量
    int select_action(torch::Tensor state);
+
+   // 前向傳播函數：傳遞狀態通過網絡，返回 Q 值
    torch::Tensor forward(torch::Tensor state);
-   void update_epsilon();  // 更新 epsilon，用於控制探索和利用的平衡
-   // 我這邊說明一下我想到的方法，因為 DQN 是有回饋的，所以加上 greedy algorithm 的部分去跑，而 DQN 內的 貪心算法就是 epsilon 的定義。
-   // 一開始選擇最優的 action，後續選擇較多的隨機動作，等結果跑出來再回測是哪個部分出現問題。
 
-// 另一種方法
-// public:
-//    DQNTrainer(int input_size, int output_size, float gamma, float lr);
-//    void train();
-//    int select_action(torch::Tensor state);
-//    torch::Tensor forward(torch::Tensor state);
-//    void update_epsilon();
-//    void store_experience(const Experience& exp);
+   // 更新 epsilon 值，逐步減少探索率
+   void update_epsilon();
 
-// 這邊都是定義 epsilon 的部分
+   // 取得裝置資訊：返回模型所在的裝置（GPU）
+   torch::Device get_device();
+
 private:
-   DQN policy_model; // 行為網路
-   DQN target_model; // 用於 Double DQN 的目標網絡
-   torch::optim::Adam optimizer; 
-   float gamma;
-   float epsilon;  // 探索率
-   float epsilon_decay;  // 探索率衰減
-   float epsilon_min;  // 最小探索率
-   void update_target_model(); // 更新目標網絡的參數
-   float max_gred_norm; // 梯度下降的最大范數
+   DQN model;                                       // 主網路模型，用於實際訓練
+   DQN target_model;                                // 目標網路模型，用於 Double DQN 中的目標 Q 值計算
+   torch::optim::Adam optimizer;                    // Adam 優化器，用於更新主網路的權重
+   std::shared_ptr<torch::optim::StepLR> scheduler; // 學習率調度器，用於動態調整學習率
 
-   // 另一種方法，經驗回放緩衝區
-   // std::deque<Experience> replay_memory;
-   // size_t replay_memory_capacity;
+   float gamma;                 // 折扣因子，決定未來獎勵的影響程度
+   float epsilon;               // 目前探索率，影響 epsilon-greedy 策略的選擇
+   float epsilon_decay;         // 探索率衰減係數，每次訓練後減少 epsilon
+   float epsilon_min;           // 最小探索率，防止探索率過低
+   int target_update_frequency; // 目標網路的更新頻率，每隔多少步驟更新一次目標網絡
+
+   // 更新目標網路的權重，使其與主網路保持同步
+   void update_target_model();
 };
 
 #endif // DQN_TRAINER_H

@@ -1,234 +1,140 @@
-// target_model.forward(next_state)：這是 Double DQN 的關鍵，它用於估計下一狀態的 Q 值。通過引入一個目標網絡來分離動作選擇和 Q 值的計算，可以減少過估計的問題。
-// update_target_model()：這個函數在每次訓練後更新目標網絡，這樣可以讓目標網絡的更新更加穩定，從而改善 Q-learning 的穩定性。
-// epsilon：這是控制探索與利用平衡的參數，隨著訓練的進行，epsilon 會逐漸減少，模型會越來越傾向於利用學到的策略。
-
 #include "DQNTrainer.h"
 
-DQNTrainer::DQNTrainer(int input_size, int output_size, float gamma, float lr)
-   : policy_model(input_size, output_size), optimizer(policy_model.parameters(), lr), gamma(gamma), target_model(input_size, output_size) {
-   epsilon = 1.0;         // 初始化 epsilon，開始時有較高的探索率
-   epsilon_decay = 0.995; // 每次訓練後減少探索率，這部分是為了避免過凝合，未來繼續調整，我還沒動
-   epsilon_min = 0.01;    // 設定最小探索率，就只是定義一下，不然等等完全不探索卡在那。
-   max_gred_norm = 10.0;  // 梯度下降的最大范數
-   // 另一種方法 replay_memory_capacity = 10000;
+// 建構子：初始化模型、最佳化器等
+DQNTrainer::DQNTrainer(int input_size, int output_size, float gamma, float lr, int target_update_freq)
+    : model(input_size, output_size), optimizer(model.parameters(), torch::optim::AdamOptions(lr).weight_decay(1e-5)), gamma(gamma), target_model(input_size, output_size), target_update_frequency(target_update_freq)
+{
+   epsilon = 1.0;         // 初始化探索率 epsilon，開始時完全探索
+   epsilon_decay = 0.995; // 每次訓練後減少 epsilon，逐步減少探索
+   epsilon_min = 0.01;    // 設定最小探索率，防止探索率過低
 
-   try 
+   // 將模型移到 CUDA
+   if (torch::cuda::is_available())
    {
-      policy_model.load_weights("dqn_model_weights.pt");
-      target_model.load_weights("dqn_target_model_weights.pt");
-      std::cout << "成功加載模型權重" << std::endl;
-   } 
-   catch (...) 
+      model.to(torch::kCUDA);        // 將主網路移到 GPU
+      target_model.to(torch::kCUDA); // 將目標網路移到 GPU
+      std::cout << "Using CUDA" << std::endl;
+      std::cout << "CUDA Device Count: " << torch::cuda::device_count() << std::endl;
+   }
+   else
    {
-      std::cout << "未找到保存的模型權重，從頭開始訓練。" << std::endl;
+      std::cout << "Using CPU" << std::endl;
    }
 
+   // 初始化目標網絡
    update_target_model();
+
+   // 引入學習率調度器，每訓練 100 步驟減少學習率 10%
+   scheduler = std::make_shared<torch::optim::StepLR>(optimizer, /*step_size=*/100, /*gamma=*/0.1);
 }
 
-void DQNTrainer::train(std::vector<Experience>& replay_memory) {
-   if (replay_memory.empty()) return;
+// Double DQN：訓練函數
+void DQNTrainer::train(std::vector<Experience> &replay_memory, int train_step)
+{
+   model.train(); // 將模型置於訓練模式
+   for (auto &experience : replay_memory)
+   {
+      // 確保所有張量在同一台裝置上（GPU）
+      auto device = model.parameters().begin()->device();
+      auto state = experience.state.to(device);                                                // 目前狀態
+      auto next_state = experience.next_state.to(device);                                      // 下一狀態
+      auto action = torch::tensor({experience.action}, torch::dtype(torch::kLong)).to(device); // 動作
+      auto reward = torch::tensor({experience.reward}).to(device);                             // 獎勵
 
-   policy_model.train();
+      // 目前狀態的 Q 值
+      auto q_values = model.forward(state);                              // 計算目前狀態的 Q 值
+      auto q_value = q_values.gather(1, action.unsqueeze(1)).squeeze(1); // 選取執行的動作對應的 Q 值
 
-   // 從經驗回放中採樣
+      // Ddouble DQN：使用主網路選擇動作
+      auto next_q_values_online = model.forward(next_state);                      // 透過主網路計算下一狀態的 Q 值
+      auto next_action_online = std::get<1>(torch::max(next_q_values_online, 1)); // 選擇 Q 值最大的動作
 
-   const int batch_size = replay_memory.size();
-   std::vector<torch::Tensor> states, next_states, actions, rewards, dones;
+      // Double DQN: 使用目標網路估計 Q 值
+      auto next_q_values_target = target_model.forward(next_state);
+      auto max_next_q_value = next_q_values_target.gather(1, next_action_online.unsqueeze(1)).squeeze(1);
 
-   for (const auto& experience : replay_memory) {
-       states.push_back(experience.state);
-       next_states.push_back(experience.next_state);
-       actions.push_back(torch::tensor(experience.action, torch::kLong));
-       rewards.push_back(torch::tensor(experience.reward));
-       dones.push_back(torch::tensor(experience.done ? 0.0f : 1.0f));
+      // 計算目標值
+      auto gamma_tensor = torch::tensor({gamma}).to(device);
+      auto target = reward + gamma_tensor * max_next_q_value; // 目標 Q 值 = 目前獎勵 + 折扣後的最大 Q 值
+
+      // 計算損失（使用目標 Q 值與目前 Q 值之間的均方誤差）
+      auto loss = torch::mse_loss(q_value, target.detach()); // detach 是為了防止目標 Q 值參與反向傳播
+
+      // 反向傳播和參數更新
+      optimizer.zero_grad(); // 清除之前的梯度
+      loss.backward();       // 計算梯度
+      optimizer.step();      // 更新模型參數
    }
 
-   auto state_batch = torch::cat(states);
-   auto next_state_batch = torch::cat(next_states);
-   auto action_batch = torch::stack(actions);
-   auto reward_batch = torch::stack(rewards);
-   auto done_batch = torch::stack(dones);
-
-   // 計算當前 Q 值
-   auto q_values = policy_model.forward(state_batch);
-   q_values = q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1);
-
-   // 使用策略網路選擇下一步動作
-   auto next_q_values_policy = policy_model.forward(next_state_batch);
-   auto next_actions = next_q_values_policy.argmax(1);
-
-   // 使用目標網路評估下一步 Q 值
-   auto next_q_values_target = target_model.forward(next_state_batch);
-   auto next_q_values = next_q_values_target.gather(1, next_actions.unsqueeze(1)).squeeze(1);
-
-   // 計算目標 Q 值
-   auto target_q_values = reward_batch + gamma * next_q_values * done_batch;
-
-   // 計算損失
-   auto loss = torch::mse_loss(q_values, target_q_values.detach());
-
-   optimizer.zero_grad();
-   loss.backward();
-   // 增加梯度下降
-   torch::nn::utils::clip_grad_norm_(policy_model.parameters(), max_grad_norm);
-   optimizer.step();
-
+   // 更新 epsilon（探索率），逐步減少探索
    update_epsilon();
-   update_target_model(); // =更新目標網路
 
-   policy_model.save_weights("dqn_policy_model_weights.pt");
-   target_model.save_weights("dqn_target_model_weights.pt");
-   std::cout << "模型權重以保存" << std::endl;
+   // 控制目標網路更新頻率
+   if (train_step % target_update_frequency == 0)
+   {
+      update_target_model();
+   }
+
+   // 更新學習率
+   scheduler->step();
 }
 
-int DQNTrainer::select_action(torch::Tensor state) {
-   policy_model.eval();
-   if (torch::rand({1}).item<float>() < epsilon) {
-      // 隨機選擇動作已增加探索性
-      return torch::randint(0, 3, {1}).item<int>();
-   } else {
-      // 利用策略網路選擇最佳動作
-      auto q_values = policy_model.forward(state);
-      return q_values.argmax(1).item<int>();
+// 選擇動作：epsilon-greedy 策略
+int DQNTrainer::select_action(torch::Tensor state)
+{
+   model.eval(); // 評估模式
+   auto device = model.parameters().begin()->device();
+   state = state.to(device); // 確保狀態在正確的裝置上 (GPU)
+
+   if (torch::rand(1).item<float>() < epsilon) // 以 epsilon 的機率進行探索
+   {
+      // 探索：隨機選擇動作
+      return torch::randint(0, 5, {1}, torch::TensorOptions().device(device)).item<int>();
+   }
+   else
+   {
+      // 利用：選擇 DQN 模型預測的最佳動作
+      auto q_values = model.forward(state);
+      return std::get<1>(torch::max(q_values, 1)).item<int>();
    }
 }
 
-// 前向傳播，取得 Q 值
-torch::Tensor DQNTrainer::forward(torch::Tensor state) {
-   return policy_model.forward(state);
+// 直接前向傳播，用於評估
+torch::Tensor DQNTrainer::forward(torch::Tensor state)
+{
+   auto device = model.parameters().begin()->device();
+   return model.forward(state.to(device));
 }
 
-void DQNTrainer::update_epsilon() {
-   if (epsilon > epsilon_min) {
-      epsilon *= epsilon_decay; // 隨著訓練的進行減少探索率
-      if (epsilon < epsilon_min) {
-          epsilon = epsilon_min;
-      }
-      std::cout << "更新 epsilon 值：" << epsilon << std::endl;
+// 更新 epsilon 值，逐步减少探索率
+void DQNTrainer::update_epsilon()
+{
+   if (epsilon > epsilon_min)
+   {
+      epsilon *= epsilon_decay;
    }
 }
 
-void DQNTrainer::update_target_model() {
-   // 软更新参数
-   float tau = 0.01;
-   auto policy_params = policy_model.named_parameters();
+// 更新目標網路的參數
+void DQNTrainer::update_target_model()
+{
+   // 使用無梯度模式複製參數，防止梯度傳播到目標網絡
+   torch::NoGradGuard no_grad; // 禁用梯度計算
+   auto model_params = model.named_parameters();
    auto target_params = target_model.named_parameters();
-
-   for (auto& item : policy_params) {
-       auto& name = item.key();
-       auto& param = item.value();
-       auto& target_param = target_params[name];
-       target_param.data().copy_(tau * param.data() + (1 - tau) * target_param.data());
+   for (const auto &item : model_params)
+   {
+      auto name = item.key();
+      auto *target_param = target_params.find(name);
+      if (target_param != nullptr)
+      {
+         target_param->copy_(item.value());
+      }
    }
 }
 
-
-
-
-// 另一個方法
-// void DQNTrainer::store_experience(const Experience& exp) {
-//     if (replay_memory.size() >= replay_memory_capacity) {
-//         replay_memory.pop_front();
-//     }
-//     replay_memory.push_back(exp);
-// }
-
-// void DQNTrainer::train() {
-//     if (replay_memory.size() < 64) return; // 當經驗不足時不進行訓練
-
-//     policy_model.train();
-
-//     // 從經驗回放中隨機採樣
-//     const int batch_size = 64;
-//     std::vector<Experience> batch;
-//     std::sample(replay_memory.begin(), replay_memory.end(), std::back_inserter(batch),
-//                 batch_size, std::mt19937{std::random_device{}()});
-
-//     std::vector<torch::Tensor> states, next_states, actions, rewards, dones;
-
-//     for (const auto& experience : batch) {
-//         states.push_back(experience.state);
-//         next_states.push_back(experience.next_state);
-//         actions.push_back(torch::tensor(experience.action, torch::kLong));
-//         rewards.push_back(torch::tensor(experience.reward));
-//         dones.push_back(torch::tensor(experience.done ? 0.0f : 1.0f));
-//     }
-
-//     auto state_batch = torch::cat(states);
-//     auto next_state_batch = torch::cat(next_states);
-//     auto action_batch = torch::stack(actions);
-//     auto reward_batch = torch::stack(rewards);
-//     auto done_batch = torch::stack(dones);
-
-//     // 計算當前 Q 值
-//     auto q_values = policy_model.forward(state_batch);
-//     q_values = q_values.gather(1, action_batch.unsqueeze(1)).squeeze(1);
-
-//     // 使用策略網路選擇下一步動作
-//     auto next_q_values_policy = policy_model.forward(next_state_batch);
-//     auto next_actions = next_q_values_policy.argmax(1);
-
-//     // 使用目標網路評估下一步 Q 值
-//     auto next_q_values_target = target_model.forward(next_state_batch);
-//     auto next_q_values = next_q_values_target.gather(1, next_actions.unsqueeze(1)).squeeze(1);
-
-//     // 計算目標 Q 值
-//     auto target_q_values = reward_batch + gamma * next_q_values * done_batch;
-
-//     // 計算損失
-//     auto loss = torch::mse_loss(q_values, target_q_values.detach());
-
-//     optimizer.zero_grad();
-//     loss.backward();
-//     // 添加梯度下降
-//     torch::nn::utils::clip_grad_norm_(policy_model.parameters(), max_grad_norm);
-//     optimizer.step();
-
-//     update_epsilon();
-//     update_target_model(); // 更新目標網路
-
-//     policy_model.save_weights("dqn_policy_model_weights.pt");
-//     target_model.save_weights("dqn_target_model_weights.pt");
-//     std::cout << "模型權重已保存" << std::endl;
-// }
-
-// int DQNTrainer::select_action(torch::Tensor state) {
-//     policy_model.eval();
-//     if (torch::rand({1}).item<float>() < epsilon) {
-//         // 隨機選擇動作已增加探索性
-//         return torch::randint(0, 3, {1}).item<int>();
-//     } else {
-//         // 利用策略網路選擇最佳動作
-//         auto q_values = policy_model.forward(state);
-//         return q_values.argmax(1).item<int>();
-//     }
-// }
-
-// torch::Tensor DQNTrainer::forward(torch::Tensor state) {
-//     return policy_model.forward(state);
-// }
-
-// void DQNTrainer::update_epsilon() {
-//     if (epsilon > epsilon_min) {
-//         epsilon *= epsilon_decay;
-//         if (epsilon < epsilon_min) {
-//             epsilon = epsilon_min;
-//         }
-//         std::cout << "更新 epsilon 值：" << epsilon << std::endl;
-//     }
-// }
-
-// void DQNTrainer::update_target_model() {
-//     // 軟更新參數
-//     float tau = 0.01;
-//     auto policy_params = policy_model.named_parameters();
-//     auto target_params = target_model.named_parameters();
-
-//     for (auto& item : policy_params) {
-//         auto& name = item.key();
-//         auto& param = item.value();
-//         auto& target_param = target_params[name];
-//         target_param.data().copy_(tau * param.data() + (1 - tau) * target_param.data());
-//     }
-// }
+// 取得模型所在的設備
+torch::Device DQNTrainer::get_device()
+{
+   return model.parameters().begin()->device();
+}
